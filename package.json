@@ -1,0 +1,23 @@
+{
+  "name": "campus-net-monitor",
+  "version": "6.0.0",
+  "private": true,
+  "description": "校园网质量深度监控 - TypeScript 重构版",
+  "workspaces": [
+    "packages/engine",
+    "packages/gui"
+  ],
+  "scripts": {
+    "dev": "concurrently -n engine,gui -c blue,green \"npm run dev -w @campus-net/engine\" \"next dev -p 3002 --dir packages/gui\"",
+    "dev:engine": "npm run dev -w @campus-net/engine",
+    "dev:gui": "next dev -p 3002 --dir packages/gui",
+    "build": "npm run build -w @campus-net/engine && npm run build -w @campus-net/gui",
+    "start": "concurrently -n engine,gui -c blue,green \"npm run start -w @campus-net/engine\" \"next start -p 3002 --dir packages/gui\"",
+    "start:engine": "npm run start -w @campus-net/engine",
+    "start:gui": "next start -p 3002 --dir packages/gui"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}

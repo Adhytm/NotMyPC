@@ -1,0 +1,23 @@
+{
+  "name": "@campus-net/engine",
+  "version": "6.0.0",
+  "description": "校园网监控引擎 - 独立HTTP服务,平台抽象层支持Windows/Linux/macOS",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --dts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "hono": "^4.6.16",
+    "@hono/node-server": "^1.14.0",
+    "execa": "^9.5.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.10.7"
+  }
+}
