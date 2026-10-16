@@ -74,8 +74,8 @@ export const TRACE_TARGETS = [
 export const MAX_LATENCY_HISTORY = 500; // 每个目标延迟列表最多保留条数
 
 // --- 引擎 HTTP 服务端口 ---
-export const ENGINE_PORT = 3001;
-export const ENGINE_HOST = '0.0.0.0';
+export const ENGINE_PORT = Number(process.env.ENGINE_PORT ?? 3001);
+export const ENGINE_HOST = process.env.ENGINE_HOST ?? '127.0.0.1';
 
 // --- 日志目录 ---
 export const LOG_DIR = 'logs';

@@ -25,6 +25,7 @@ import { getPingStats } from '../core/ping.js';
 import { getHttpStats } from '../core/http.js';
 import { getDownloadStats } from '../core/download.js';
 import { getWifiStats } from './wifi.js';
+import { logger } from '../logger/index.js';
 import type { NetworkSnapshot } from '../types.js';
 
 /** 内存中的异常快照列表 */
@@ -187,8 +188,71 @@ export async function captureSnapshot(
     snapshots = snapshots.slice(-Math.floor(MAX_SNAPSHOTS / 2));
   }
 
-  console.log(`[snapshot] 快照已保存 (原因: ${reason})`);
+  // 写入异常快照日志文件 (snapshot_log.txt)
+  const snapshotText = formatSnapshotLog(snapshot);
+  logger.append('snapshot', snapshotText);
+
+  console.log(`[snapshot] 快照已保存并落盘 (原因: ${reason})`);
   return snapshot;
+}
+
+/** 格式化异常快照为可读证据文本 */
+function formatSnapshotLog(snapshot: NetworkSnapshot): string {
+  const lines: string[] = [];
+  lines.push('\n' + '='.repeat(70));
+  lines.push(`【网络异常现场快照】  时间: ${snapshot.systemTime} (${snapshot.timestamp})`);
+  lines.push(`触发原因: ${snapshot.reason}`);
+  lines.push('='.repeat(70));
+
+  // Wi-Fi 现场
+  lines.push('\n[1. Wi-Fi 现场状态]');
+  if (snapshot.wifi) {
+    lines.push(`  摘要: ${snapshot.wifi.summary}`);
+    lines.push(`  原始输出:\n${snapshot.wifi.raw.trim().split('\n').map((l) => '    ' + l).join('\n')}`);
+  } else {
+    lines.push('  无可用 Wi-Fi 接口或未连接无线网络');
+  }
+
+  // IP 配置
+  lines.push('\n[2. IP 与网关配置]');
+  if (snapshot.ipConfig) {
+    lines.push(`  默认网关: ${snapshot.ipConfig.defaultGateway || '未检测到'}`);
+    lines.push(`  IP 地址: ${snapshot.ipConfig.ipAddresses.join(', ') || '无'}`);
+    lines.push(`  DNS 服务器: ${snapshot.ipConfig.dnsServers.join(', ') || '无'}`);
+  } else {
+    lines.push('  无法获取 IP 配置');
+  }
+
+  // Ping 汇总
+  lines.push('\n[3. 异常时刻 Ping 表现]');
+  for (const p of snapshot.pingSummary) {
+    lines.push(`  ${p.target} (${p.host}): 发送 ${p.sent} 次, 丢包 ${p.lost} 次, 丢包率 ${p.lossRate}%`);
+  }
+
+  // HTTP 汇总
+  lines.push('\n[4. 异常时刻 HTTP 应用层表现]');
+  lines.push(`  累计请求: ${snapshot.httpSummary.total} 次, 失败: ${snapshot.httpSummary.fail} 次, 慢连接: ${snapshot.httpSummary.slow} 次`);
+  if (snapshot.httpSummary.recentTimes.length > 0) {
+    lines.push(`  最近响应耗时: ${snapshot.httpSummary.recentTimes.map((t) => t + 'ms').join(', ')}`);
+  }
+
+  // 下载测速
+  lines.push('\n[5. 持续流媒体下载测速表现]');
+  lines.push(`  累计测试: ${snapshot.downloadSummary.total} 次, 失败: ${snapshot.downloadSummary.fail} 次, 停顿: ${snapshot.downloadSummary.stall} 次, 慢速: ${snapshot.downloadSummary.slow} 次`);
+  if (snapshot.downloadSummary.recentSpeeds.length > 0) {
+    lines.push(`  最近下载速度: ${snapshot.downloadSummary.recentSpeeds.map((s) => s.toFixed(2) + 'MB/s').join(', ')}`);
+  }
+
+  // 路由表 (活跃前30行)
+  lines.push('\n[6. 活跃路由表快照]');
+  lines.push(snapshot.routeTable.trim().split('\n').map((l) => '  ' + l).join('\n'));
+
+  // ARP 缓存表
+  lines.push('\n[7. ARP 缓存表快照]');
+  lines.push(snapshot.arpTable.trim().split('\n').slice(0, 30).map((l) => '  ' + l).join('\n'));
+
+  lines.push('\n' + '='.repeat(70) + '\n');
+  return lines.join('\n');
 }
 
 /** 获取所有异常快照 */

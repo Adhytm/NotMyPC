@@ -144,5 +144,5 @@ export function getImpactCount(): number {
 /** 重置业务影响记录 (停止监控时调用) */
 export function resetImpactRecords(): void {
   records = [];
-  nextId = 1;
+  // 保持 nextId 单调递增, 防止用户不刷新网页重新启动时触发 mergeById 冲突丢弃事件
 }

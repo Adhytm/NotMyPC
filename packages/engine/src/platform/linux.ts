@@ -17,10 +17,21 @@ export class LinuxAdapter implements PlatformAdapter {
 
   async ping(host: string, timeoutMs: number, targetName: string): Promise<PingResult> {
     const timestamp = new Date().toISOString();
+    const sanitizedHost = host.trim();
+    if (!sanitizedHost || sanitizedHost.startsWith('-')) {
+      return {
+        target: targetName,
+        host,
+        ok: false,
+        latencyMs: null,
+        rawOutput: '[ping错误: 非法的主机名或参数]',
+        timestamp,
+      };
+    }
     try {
-      // Linux ping: -c 1 (发1个包), -W <秒> (整体超时)
+      // Linux ping: -c 1 (发1个包), -W <秒> (整体超时), '--' 防止参数注入
       const timeoutSec = Math.max(1, Math.ceil(timeoutMs / 1000));
-      const result = await execa('ping', ['-c', '1', '-W', String(timeoutSec), host], {
+      const result = await execa('ping', ['-c', '1', '-W', String(timeoutSec), '--', sanitizedHost], {
         // execa 的 timeout 单位是毫秒: 预留 ping 自身超时 + 2s 进程余量
         timeout: timeoutMs + 2000,
         reject: false,
@@ -51,9 +62,12 @@ export class LinuxAdapter implements PlatformAdapter {
 
   /**
    * 从 Linux ping 输出中解析延迟。
-   * 格式: "time=15.3 ms" 或 "time=15.3ms"
+   * 格式: "time=15.3 ms" 或 "time=0.45 ms" 或 "time<1 ms"
    */
   private parseLatency(output: string): number | null {
+    if (/[<]\s*1\s*ms/i.test(output)) {
+      return 0.5;
+    }
     const match = output.match(/time[=](\d+(?:\.\d+)?)\s*ms/i);
     if (match) {
       return parseFloat(match[1]);

@@ -54,13 +54,30 @@ function decodeOutput(raw: Buffer): string {
 /**
  * 从 ping 命令输出中解析延迟值。
  *
- * 兼容中英文输出:
- *   中文: "时间=15ms"
- *   英文: "time=15ms"
- * 数字和 "ms" 是 ASCII,无论编码如何都能正确解析。
+ * 兼容中英文输出与极低延迟:
+ *   中文: "时间=15ms", "时间<1ms"
+ *   英文: "time=15ms", "time<1ms"
+ * 当延迟小于 1ms 时 (<1ms), 记为 0.5ms 以反映微秒级网络响应,
+ * 并防止误落到底部汇总的 "Minimum = 0ms" 造成失真。
  */
 function parseLatency(output: string): number | null {
-  // 匹配 "时间=15ms" / "time=15ms" / "time=15.3 ms" 等格式
+  // 1. 优先在回复行匹配 (来自 / Reply from)
+  for (const line of output.split('\n')) {
+    if (line.includes('TTL=') || line.includes('ttl=')) {
+      if (/[<]\s*1\s*ms/i.test(line)) {
+        return 0.5;
+      }
+      const lineMatch = line.match(/[=]\s*(\d+(?:\.\d+)?)\s*ms/i);
+      if (lineMatch) {
+        return parseFloat(lineMatch[1]);
+      }
+    }
+  }
+
+  // 2. 兜底全局匹配
+  if (/[<]\s*1\s*ms/i.test(output)) {
+    return 0.5;
+  }
   const match = output.match(/[=]\s*(\d+(?:\.\d+)?)\s*ms/i);
   if (match) {
     return parseFloat(match[1]);
@@ -73,8 +90,19 @@ export class WindowsAdapter implements PlatformAdapter {
 
   async ping(host: string, timeoutMs: number, targetName: string): Promise<PingResult> {
     const timestamp = new Date().toISOString();
+    const sanitizedHost = host.trim();
+    if (!sanitizedHost || sanitizedHost.startsWith('-')) {
+      return {
+        target: targetName,
+        host,
+        ok: false,
+        latencyMs: null,
+        rawOutput: '[ping错误: 非法的主机名或参数]',
+        timestamp,
+      };
+    }
     try {
-      const result = await execa(systemCommand('ping.exe'), ['-n', '1', '-w', String(timeoutMs), host], {
+      const result = await execa(systemCommand('ping.exe'), ['-n', '1', '-w', String(timeoutMs), sanitizedHost], {
         encoding: 'buffer',
         // execa 的 timeout 单位是毫秒: 预留 ping 自身超时 + 2s 进程余量
         timeout: timeoutMs + 2000,

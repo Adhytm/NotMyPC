@@ -129,6 +129,6 @@ export function getTimelineCount(): number {
 /** 重置时间轴 (停止监控时调用) */
 export function resetTimeline(): void {
   events = [];
-  nextId = 1;
+  // 保持 nextId 单调递增, 防止用户不刷新网页重新启动时触发 mergeById 冲突丢弃事件
   lastEventTimeMs = 0;
 }

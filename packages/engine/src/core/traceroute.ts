@@ -33,6 +33,8 @@ const MAX_DIAGNOSIS_HISTORY = 50;
 // 底层 tracert 命令执行
 // ============================================================
 
+import { logger } from '../logger/index.js';
+
 /**
  * 执行 tracert/traceroute 命令, 返回原始文本输出
  *
@@ -45,6 +47,11 @@ async function execTraceroute(
   maxHops = 10,
   timeoutMs = 1000
 ): Promise<string> {
+  const sanitizedTarget = target.trim();
+  if (!sanitizedTarget || sanitizedTarget.startsWith('-')) {
+    return '[tracert错误: 非法的目标地址]';
+  }
+
   const platform = process.platform;
   const totalTimeout = maxHops * (timeoutMs / 1000) + 10;
 
@@ -53,10 +60,9 @@ async function execTraceroute(
 
     if (platform === 'win32') {
       // Windows: tracert -d (不解析主机名, 加速输出)
-      // 使用 System32 绝对路径, 避免工作目录下同名文件劫持命令 (如项目根目录的 ping.py)
       const tracertBin = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tracert.exe');
       result = await execa(tracertBin, [
-        '-d', '-h', String(maxHops), '-w', String(timeoutMs), target,
+        '-d', '-h', String(maxHops), '-w', String(timeoutMs), sanitizedTarget,
       ], {
         encoding: 'buffer',
         timeout: totalTimeout * 1000,
@@ -64,13 +70,28 @@ async function execTraceroute(
       });
     } else {
       // Linux/macOS: traceroute -n (不解析主机名)
-      result = await execa('traceroute', [
-        '-n', '-m', String(maxHops), '-w', String(Math.ceil(timeoutMs / 1000)), target,
-      ], {
-        encoding: 'buffer',
-        timeout: totalTimeout * 1000,
-        reject: false,
-      });
+      try {
+        result = await execa('traceroute', [
+          '-n', '-m', String(maxHops), '-w', String(Math.ceil(timeoutMs / 1000)), '--', sanitizedTarget,
+        ], {
+          encoding: 'buffer',
+          timeout: totalTimeout * 1000,
+          reject: false,
+        });
+      } catch (err: any) {
+        // Linux 下如果无 traceroute, 尝试回退到内置的 tracepath
+        if (platform === 'linux') {
+          result = await execa('tracepath', [
+            '-n', '-m', String(maxHops), sanitizedTarget,
+          ], {
+            encoding: 'buffer',
+            timeout: totalTimeout * 1000,
+            reject: false,
+          });
+        } else {
+          throw err;
+        }
+      }
     }
 
     return decodeOutput(result.stdout as Buffer);
@@ -302,7 +323,35 @@ export async function runDiagnosis(
     diagnosisHistory = diagnosisHistory.slice(-Math.floor(MAX_DIAGNOSIS_HISTORY / 2));
   }
 
+  // 写入路由追踪日志文件 (trace_log.txt)
+  const traceLogContent = formatDiagnosisLog(result);
+  logger.append('trace', traceLogContent);
+
   return result;
+}
+
+/** 格式化路由追踪结果为日志文本 */
+function formatDiagnosisLog(result: DiagnosisResult): string {
+  const lines: string[] = [];
+  lines.push('\n' + '='.repeat(65));
+  lines.push(`路由追踪诊断 [${result.timestamp}]  原因: ${result.reason}`);
+  lines.push('='.repeat(65));
+  if (result.wifiSnapshot) {
+    lines.push(`Wi-Fi环境: SSID=${result.wifiSnapshot.ssid} 信号=${result.wifiSnapshot.signal} BSSID=${result.wifiSnapshot.bssid}`);
+  }
+  lines.push(`诊断结论: ${result.analysis.join(' | ')}`);
+  lines.push('-'.repeat(65));
+  for (const t of result.traces) {
+    lines.push(`\n>>> 目标: ${t.name} (${t.host})  最大跳数: ${t.maxHops}`);
+    if (t.firstTimeoutHop !== null) {
+      lines.push(`    ⚠ 首次超时发生于第 ${t.firstTimeoutHop} 跳`);
+    } else {
+      lines.push('    ✔ 链路通畅无超时');
+    }
+    lines.push(t.rawOutput);
+  }
+  lines.push('='.repeat(65) + '\n');
+  return lines.join('\n');
 }
 
 /** 获取诊断历史 */

@@ -102,14 +102,14 @@ export function createApp(): Hono {
         }
       }, 15000);
 
-      // 流关闭时清理
-      stream.onAbort(() => {
-        unsubscribe();
-        clearInterval(heartbeat);
+      // 保持流开启直到客户端断开, 并在断开时安全释放 Promise 避免内存泄漏
+      await new Promise<void>((resolve) => {
+        stream.onAbort(() => {
+          unsubscribe();
+          clearInterval(heartbeat);
+          resolve();
+        });
       });
-
-      // 保持流开启 (直到客户端断开)
-      await new Promise(() => {});
     });
   });
 

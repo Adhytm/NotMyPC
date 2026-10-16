@@ -16,10 +16,24 @@ export class MacosAdapter implements PlatformAdapter {
 
   async ping(host: string, timeoutMs: number, targetName: string): Promise<PingResult> {
     const timestamp = new Date().toISOString();
+    const sanitizedHost = host.trim();
+    if (!sanitizedHost || sanitizedHost.startsWith('-')) {
+      return {
+        target: targetName,
+        host,
+        ok: false,
+        latencyMs: null,
+        rawOutput: '[ping错误: 非法的主机名或参数]',
+        timestamp,
+      };
+    }
     try {
       // macOS ping: -c 1 (发1个包), -t <秒> (整体超时)
+      // 注意: macOS 下 IPv6 必须调用 ping6 命令
+      const isIpv6 = sanitizedHost.includes(':');
+      const bin = isIpv6 ? 'ping6' : 'ping';
       const timeoutSec = Math.max(1, Math.ceil(timeoutMs / 1000));
-      const result = await execa('ping', ['-c', '1', '-t', String(timeoutSec), host], {
+      const result = await execa(bin, ['-c', '1', '-t', String(timeoutSec), '--', sanitizedHost], {
         // execa 的 timeout 单位是毫秒: 预留 ping 自身超时 + 2s 进程余量
         timeout: timeoutMs + 2000,
         reject: false,
@@ -50,9 +64,12 @@ export class MacosAdapter implements PlatformAdapter {
 
   /**
    * 从 macOS ping 输出中解析延迟。
-   * 格式: "time=15.123 ms"
+   * 格式: "time=15.123 ms" 或 "time<1 ms"
    */
   private parseLatency(output: string): number | null {
+    if (/[<]\s*1\s*ms/i.test(output)) {
+      return 0.5;
+    }
     const match = output.match(/time[=](\d+(?:\.\d+)?)\s*ms/i);
     if (match) {
       return parseFloat(match[1]);

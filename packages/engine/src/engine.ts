@@ -52,12 +52,21 @@ let startedAt: string | null = null;
 let config: MonitorConfig = getDefaultConfig();
 
 /** 定时器引用 (用于 stop 时清理) */
-let pingTimer: ReturnType<typeof setInterval> | null = null;
-let httpTimer: ReturnType<typeof setInterval> | null = null;
-let dnsTimer: ReturnType<typeof setInterval> | null = null;
-let downloadTimer: ReturnType<typeof setInterval> | null = null;
-let wifiTimer: ReturnType<typeof setInterval> | null = null;
-let summaryTimer: ReturnType<typeof setInterval> | null = null;
+let pingTimer: ReturnType<typeof setTimeout> | null = null;
+let httpTimer: ReturnType<typeof setTimeout> | null = null;
+let dnsTimer: ReturnType<typeof setTimeout> | null = null;
+let downloadTimer: ReturnType<typeof setTimeout> | null = null;
+let wifiTimer: ReturnType<typeof setTimeout> | null = null;
+let summaryTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 任务执行锁 (防止异步任务并发重叠堆积) */
+let isRunningPing = false;
+let isRunningHttp = false;
+let isRunningDns = false;
+let isRunningDownload = false;
+let isRunningWifi = false;
+let isRunningSummary = false;
+let isRunningDiagnosis = false;
 
 /** 异常事件列表 */
 let anomalies: AnomalyEvent[] = [];
@@ -235,7 +244,8 @@ async function runPing(): Promise<void> {
         // 全面超时时也触发快照 (与冷却机制共用, 不会重复捕获)
         triggerSnapshot(`全面超时 (${results.length}/${results.length} 目标不可达)`);
         if (consecutiveAllFailRounds >= config.consecutiveFailForTracert) {
-          await maybeRunTraceroute(
+          // 异步触发诊断 (后台非阻塞运行, 避免阻塞主 ping 循环)
+          void maybeRunTraceroute(
             `${consecutiveAllFailRounds}/${results.length} 目标连续超时`
           );
           consecutiveAllFailRounds = 0; // 重置计数器
@@ -253,12 +263,18 @@ async function runPing(): Promise<void> {
  * 检查冷却时间, 满足条件时执行路由追踪诊断
  */
 async function maybeRunTraceroute(reason: string): Promise<void> {
+  if (isRunningDiagnosis) {
+    console.log(`[engine] 诊断正在进行中, 跳过并发触发`);
+    return;
+  }
+
   const now = Date.now() / 1000;
   if (now - lastTraceTime < config.traceCooldown) {
     console.log(`[engine] tracert 冷却中, 跳过 (${Math.round(config.traceCooldown - (now - lastTraceTime))}s 后重试)`);
     return;
   }
 
+  isRunningDiagnosis = true;
   lastTraceTime = now;
   console.log(`[engine] ⚠ 触发自动诊断: ${reason}`);
 
@@ -269,10 +285,14 @@ async function maybeRunTraceroute(reason: string): Promise<void> {
     const wifiStats = getWifiStats();
     const wifiInfo = wifiStats.current ?? null;
     const result = await runDiagnosis(reason, wifiInfo);
-    emit('traceroute', result);
+    if (status === 'running') {
+      emit('traceroute', result);
+    }
     console.log(`[engine] 诊断完成: ${result.analysis.join(', ')}`);
   } catch (e) {
     console.error('[engine] 诊断任务异常:', e);
+  } finally {
+    isRunningDiagnosis = false;
   }
 }
 
@@ -596,6 +616,124 @@ function runSummary(): void {
 }
 
 // ============================================================
+// 任务循环调度器 (递归 setTimeout 避免任务堆叠与并发风暴)
+// ============================================================
+
+function schedulePing(delayMs: number): void {
+  if (status !== 'running') return;
+  if (pingTimer) clearTimeout(pingTimer);
+  pingTimer = setTimeout(async () => {
+    pingTimer = null;
+    if (status !== 'running') return;
+    if (isRunningPing) return;
+    isRunningPing = true;
+    try {
+      await runPing();
+    } finally {
+      isRunningPing = false;
+      if (status === 'running') {
+        schedulePing(config.pingInterval * 1000);
+      }
+    }
+  }, delayMs);
+}
+
+function scheduleHttp(delayMs: number): void {
+  if (status !== 'running') return;
+  if (httpTimer) clearTimeout(httpTimer);
+  httpTimer = setTimeout(async () => {
+    httpTimer = null;
+    if (status !== 'running') return;
+    if (isRunningHttp) return;
+    isRunningHttp = true;
+    try {
+      await runHttp();
+    } finally {
+      isRunningHttp = false;
+      if (status === 'running') {
+        scheduleHttp(config.httpInterval * 1000);
+      }
+    }
+  }, delayMs);
+}
+
+function scheduleDns(delayMs: number): void {
+  if (status !== 'running') return;
+  if (dnsTimer) clearTimeout(dnsTimer);
+  dnsTimer = setTimeout(async () => {
+    dnsTimer = null;
+    if (status !== 'running') return;
+    if (isRunningDns) return;
+    isRunningDns = true;
+    try {
+      await runDns();
+    } finally {
+      isRunningDns = false;
+      if (status === 'running') {
+        scheduleDns(config.dnsInterval * 1000);
+      }
+    }
+  }, delayMs);
+}
+
+function scheduleDownload(delayMs: number): void {
+  if (status !== 'running') return;
+  if (downloadTimer) clearTimeout(downloadTimer);
+  downloadTimer = setTimeout(async () => {
+    downloadTimer = null;
+    if (status !== 'running') return;
+    if (isRunningDownload) return;
+    isRunningDownload = true;
+    try {
+      await runDownload();
+    } finally {
+      isRunningDownload = false;
+      if (status === 'running') {
+        scheduleDownload(config.downloadInterval * 1000);
+      }
+    }
+  }, delayMs);
+}
+
+function scheduleWifi(delayMs: number): void {
+  if (status !== 'running') return;
+  if (wifiTimer) clearTimeout(wifiTimer);
+  wifiTimer = setTimeout(async () => {
+    wifiTimer = null;
+    if (status !== 'running') return;
+    if (isRunningWifi) return;
+    isRunningWifi = true;
+    try {
+      await runWifi();
+    } finally {
+      isRunningWifi = false;
+      if (status === 'running') {
+        scheduleWifi(config.wifiInterval * 1000);
+      }
+    }
+  }, delayMs);
+}
+
+function scheduleSummary(delayMs: number): void {
+  if (status !== 'running') return;
+  if (summaryTimer) clearTimeout(summaryTimer);
+  summaryTimer = setTimeout(() => {
+    summaryTimer = null;
+    if (status !== 'running') return;
+    if (isRunningSummary) return;
+    isRunningSummary = true;
+    try {
+      runSummary();
+    } finally {
+      isRunningSummary = false;
+      if (status === 'running') {
+        scheduleSummary(config.summaryInterval * 1000);
+      }
+    }
+  }, delayMs);
+}
+
+// ============================================================
 // 公共 API
 // ============================================================
 
@@ -630,20 +768,13 @@ export async function startMonitor(customConfig?: Partial<MonitorConfig>): Promi
   // 启动网络自检 (异步, 不阻塞首轮探测)
   runStartupCheck();
 
-  // 立即执行一轮
-  runPing();
-  runHttp();
-  runDns();
-  runDownload();
-  runWifi();
-
-  // 设置定时器
-  pingTimer = setInterval(runPing, config.pingInterval * 1000);
-  httpTimer = setInterval(runHttp, config.httpInterval * 1000);
-  dnsTimer = setInterval(runDns, config.dnsInterval * 1000);
-  downloadTimer = setInterval(runDownload, config.downloadInterval * 1000);
-  wifiTimer = setInterval(runWifi, config.wifiInterval * 1000);
-  summaryTimer = setInterval(runSummary, config.summaryInterval * 1000);
+  // 调度各监控任务 (首次以 0ms 延时立即异步执行, 并在完成后按间隔递归调度)
+  schedulePing(0);
+  scheduleHttp(0);
+  scheduleDns(0);
+  scheduleDownload(0);
+  scheduleWifi(0);
+  scheduleSummary(config.summaryInterval * 1000);
 }
 
 /**
@@ -659,14 +790,15 @@ export function stopMonitor(): void {
   console.log('[engine] 停止监控');
 
   // 清理所有定时器
-  if (pingTimer) clearInterval(pingTimer);
-  if (httpTimer) clearInterval(httpTimer);
-  if (dnsTimer) clearInterval(dnsTimer);
-  if (downloadTimer) clearInterval(downloadTimer);
-  if (wifiTimer) clearInterval(wifiTimer);
-  if (summaryTimer) clearInterval(summaryTimer);
+  if (pingTimer) clearTimeout(pingTimer);
+  if (httpTimer) clearTimeout(httpTimer);
+  if (dnsTimer) clearTimeout(dnsTimer);
+  if (downloadTimer) clearTimeout(downloadTimer);
+  if (wifiTimer) clearTimeout(wifiTimer);
+  if (summaryTimer) clearTimeout(summaryTimer);
 
   pingTimer = httpTimer = dnsTimer = downloadTimer = wifiTimer = summaryTimer = null;
+  isRunningPing = isRunningHttp = isRunningDns = isRunningDownload = isRunningWifi = isRunningSummary = false;
 
   // 生成最终汇总
   runSummary();
